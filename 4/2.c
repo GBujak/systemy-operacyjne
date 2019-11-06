@@ -1,54 +1,56 @@
-#include <sys/types.h>
-#include <sys/ipc.h>
-#include <sys/msg.h>
-#include <stdio.h>
 #include <string.h>
-
-#include<sys/wait.h> 
-#include<unistd.h> 
-
-#define BUFFER_SIZE 50
-#define MESSAGE_TYPE 1
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/msg.h>
+#include <sys/ipc.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 typedef struct {
     long type;
-    char mtext[BUFFER_SIZE + 1]; // jeden znak więcej, żeby dodać w tym
-} buffer_t;                    // miejscu znak końca ciągu znaków
+    char mtext[50];
+} buffer_t;
 
-
-void receive_msg(int mqid, buffer_t* buff) {
-    if (msgrcv(mqid, buff, BUFFER_SIZE, MESSAGE_TYPE, 0) < 0) {
+void receive_message(int mqid, buffer_t* buffer) {
+    if (msgrcv(mqid, buffer, sizeof(buffer->mtext), 1, 0) < 0)
         perror("msgrcv");
-    } else {
-        buff->mtext[BUFFER_SIZE] = '\0';
-        printf("Odebrano: %s\n", buff->mtext);
-    }
+    else printf("otrzymano: %s\n", buffer->mtext);
 }
 
-void send_msg(int mqid, buffer_t* buff, const char* message) {
-    strncpy(buff->mtext, message, BUFFER_SIZE);
-    if (msgsnd(mqid, buff, BUFFER_SIZE, 0) < 0)
+void send_message(int mqid, buffer_t* buffer, const char* message) {
+    buffer->type = 1;
+    memset(buffer->mtext, 0, sizeof(buffer->mtext));
+    strncpy(buffer->mtext, message, 49);
+
+    if (msgsnd(mqid, buffer, sizeof(buffer->mtext), 0) < 0)
         perror("msgsnd");
 }
 
 int main(void) {
-    // IPC_PRIVATE - kolejka dostępna tylko dla tego procesu lub procesów potomnych
-    // IPC_CREAT - stwórz nową, jeśli nie istnieje
-    // IPC_EXCL  - zwróć błąd, jeśli kolejka o tym kluczu już istnieje
-    int id = msgget(IPC_PRIVATE, 0600 | IPC_CREAT | IPC_EXCL);
+    int key = ftok("/tmp", 8);
+    if (key < 0) perror("ftok");
+
+    int id = msgget(key, 0600 | IPC_CREAT | IPC_EXCL);
     if (id < 0) perror("msgget");
 
+    buffer_t buffer = {
+        1, ""
+    };
     int pid = fork();
-
-    buffer_t buff = { 1, "" };
-    for (int i = 0; i < 5; i++) {
-        if (pid != 0) send_msg(id, &buff, "!!! wiadomosc !!!");
-        else receive_msg(id, &buff);
+    
+    if (pid < 0) perror("fork");
+    if (pid != 0) {
+        receive_message(id, &buffer);
+    } else {
+        send_message(id, &buffer, "wiadomosc!");
+        exit(0);
     }
 
-    if (pid != 0) wait(0);
-    // IPC_RMID - usuń kolejkę o danym ID
-    if (pid != 0)
-        if (msgctl(id, IPC_RMID, 0) < 0) perror("msgctl");
+    if (wait(0) < 0) perror("wait");
+
+    if (msgctl(id, IPC_RMID, 0) < 0)
+        perror("msgctl");
+
     return 0;
 }
