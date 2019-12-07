@@ -4,34 +4,37 @@
 #include <stdbool.h>
 #include <unistd.h>
 
-#define READER_COUNT 5
+#define READER_COUNT 10
 
 #define LOG(x) \
 if (x) fprintf(stderr, "%s error\n", #x)
 
 char buffer[20];
 pthread_cond_t conditional;
-sem_t semaphore;
-pthread_mutex_t mut;
-// mutex blokuje semafor - czytelnicy czekają na odblokowanie
-bool writing = false;
+pthread_mutex_t mux;
+int msg_id = 0;
+int readers_left = 0;
 bool writer_ended = false;
 
-void* reader(void* arg) {
-    while (!writer_ended) {
-        LOG (pthread_mutex_lock(&mut));
-        while (writing)
-            pthread_cond_wait(&conditional, &mut);
-        LOG (sem_wait(&semaphore));
-        LOG (pthread_mutex_unlock(&mut));
-        
-        usleep(1000);
-        printf("Czytelnik odczytał: %s\n", buffer);
 
-        LOG (pthread_mutex_lock(&mut));
-        LOG (sem_post(&semaphore));
+void* reader(void* arg) {
+    // Czekaj, aż nie zostanie zapisana pierwsza wiadomość
+    LOG (pthread_mutex_lock(&mux));
+    while (msg_id == 0)
+        LOG (pthread_cond_wait(&conditional, &mux));
+    LOG (pthread_mutex_unlock(&mux));
+    
+    while (!writer_ended) {
+        int current_msg = msg_id;
+        printf("Przeczytano: %s\n", buffer);
+
+        LOG (pthread_mutex_lock(&mux));
+        readers_left--;
         LOG (pthread_cond_broadcast(&conditional));
-        LOG (pthread_mutex_unlock(&mut));
+        // czekaj na nową wiadomość lub koniec wiadomości
+        while (msg_id == current_msg && !writer_ended)
+            LOG (pthread_cond_wait(&conditional, &mux));
+        LOG (pthread_mutex_unlock(&mux));
     }
     return NULL;
 }
@@ -39,33 +42,26 @@ void* reader(void* arg) {
 void* writer(void* arg) {
     int i;
     for (i = 0; i < 20; i++) {
-        usleep(1000);
-        LOG (pthread_mutex_lock(&mut));
-        int readers = 0;
-        LOG (sem_getvalue(&semaphore, &readers));
-        while (writing || readers != READER_COUNT) {
-            LOG (pthread_cond_wait(&conditional, &mut));
-            LOG (sem_getvalue(&semaphore, &readers));
-        }
-        writing = true;
-
-        sprintf(buffer, "Zapis %d", i);
-
-        writing = false;
-        LOG (pthread_cond_signal(&conditional));
-        LOG (pthread_mutex_unlock(&mut));
+        LOG (pthread_mutex_lock(&mux));
+        sprintf(buffer, "wiadomosc #%d", i);
+        printf("zapisano: %d\n", i);
+        msg_id++;
+        readers_left = READER_COUNT;
+        LOG (pthread_cond_broadcast(&conditional));
+        // czekaj aż każdy czytelnik przeczyta
+        while (readers_left)
+            LOG (pthread_cond_wait(&conditional, &mux));
+        LOG (pthread_mutex_unlock(&mux));
     }
-    LOG (pthread_mutex_lock(&mut));
+    // przekaż czytelnikom, że skończyłeś
     writer_ended = true;
-    LOG (pthread_mutex_unlock(&mut));
-
+    LOG (pthread_cond_broadcast(&conditional));
     return NULL;
 }
 
 int main(void) {
     LOG (pthread_cond_init(&conditional, NULL));
-    LOG (sem_init(&semaphore, 0, READER_COUNT));
-    LOG (pthread_mutex_init(&mut, NULL));
+    LOG (pthread_mutex_init(&mux, NULL));
 
     pthread_t writer_thread, reader_threads[READER_COUNT];
     LOG (pthread_create(&writer_thread, 0, &writer, NULL));
@@ -78,7 +74,6 @@ int main(void) {
         LOG (pthread_join(reader_threads[i], NULL));
 
     LOG (pthread_cond_destroy(&conditional));
-    LOG (sem_destroy(&semaphore));
-    LOG (pthread_mutex_destroy(&mut));
+    LOG (pthread_mutex_destroy(&mux));
 }
 
