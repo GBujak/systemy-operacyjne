@@ -17,7 +17,7 @@ long get_size(char* fname) {
     return st.st_size;
 }
 
-void child_porn(char* from, char* to) {
+void cp_impl(char* from, char* to) {
     int from_desc = open(from, O_RDONLY, 0600);
     if (from_desc < 0) perror("open");
     int to_desc = creat(to, 0666);
@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
     }
 
     printf("kopiuje %s do %s\n", argv[1], argv[2]);
-    child_porn(argv[1], argv[2]);
+    cp_impl(argv[1], argv[2]);
 
     return 0;
 }
